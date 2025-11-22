@@ -81,6 +81,7 @@
 #include "vector.h"
 #include "nilfs_gc.h"
 #include "nilfs_cleaner.h"
+#include "nilfs_cleaning_policy.h"
 #include "cleaner_msg.h"
 #include "cldconfig.h"
 #include "cnormap.h"
@@ -117,65 +118,7 @@ static const struct option long_option[] = {
 	"  -V            \tprint version and exit\n"
 #endif	/* _GNU_SOURCE */
 
-/**
- * struct nilfs_cleanerd - nilfs cleaner daemon
- * @nilfs: nilfs object
- * @cnormap: checkpoint number reverse mapper
- * @config: config structure
- * @conffile: configuration file name
- * @running: running state
- * @fallback: fallback state
- * @retry_cleaning: retrying reclamation for protected segments
- * @no_timeout: the next timeout will be 0 seconds
- * @ncleansegs: number of segments cleaned per cycle
- * @cleaning_interval: cleaning interval
- * @target: target time for sleeping (monotonic time)
- * @timeout: timeout value for sleeping
- * @min_reclaimable_blocks: min. number of reclaimable blocks
- * @prev_nongc_ctime: previous nongc ctime
- * @recvq: receive queue
- * @recvq_name: receive queue name
- * @sendq: send queue
- * @client_uuid: uuid of the previous message received from a client
- * @pending_cmd: pending client command
- * @jobid: current job id
- * @mm_prev_state: previous status during suspending
- * @mm_nrestpasses: remaining number of passes
- * @mm_nrestsegs: remaining number of segment (1-pass)
- * @mm_ncleansegs: number of segments cleaned per cycle (manual mode)
- * @mm_protection_period: protection period (manual mode)
- * @mm_cleaning_interval: cleaning interval (manual mode)
- * @mm_min_reclaimable_blocks: min. number of reclaimable blocks (manual mode)
- */
-struct nilfs_cleanerd {
-	struct nilfs *nilfs;
-	struct nilfs_cnormap *cnormap;
-	struct nilfs_cldconfig config;
-	char *conffile;
-	int running;
-	int fallback;
-	int retry_cleaning;
-	int no_timeout;
-	int shutdown;
-	long ncleansegs;
-	struct timespec cleaning_interval;
-	struct timespec target;
-	struct timespec timeout;
-	unsigned long min_reclaimable_blocks;
-	uint64_t prev_nongc_ctime;
-	mqd_t recvq;
-	char *recvq_name;
-	mqd_t sendq;
-	uuid_t client_uuid;
-	unsigned long jobid;
-	int mm_prev_state;
-	int mm_nrestpasses;
-	long mm_nrestsegs;
-	long mm_ncleansegs;
-	struct timespec mm_protection_period;
-	struct timespec mm_cleaning_interval;
-	unsigned long mm_min_reclaimable_blocks;
-};
+#include "cleanerd.h"
 
 /**
  * struct nilfs_segimp - segment importance
@@ -201,6 +144,36 @@ static const char *nilfs_cleaner_cmd_name[] = {
 	"get-status", "run", "suspend", "resume", "tune", "reload", "wait",
 	"stop", "shutdown"
 };
+
+/* Global policy registry */
+#define MAX_POLICIES 16
+static struct nilfs_cleaning_policy *registered_policies[MAX_POLICIES];
+static int num_registered_policies = 0;
+
+int nilfs_register_policy(struct nilfs_cleaning_policy *policy)
+{
+	if (num_registered_policies >= MAX_POLICIES) {
+		syslog(LOG_ERR, "too many policies registered");
+		return -1;
+	}
+	
+	registered_policies[num_registered_policies++] = policy;
+	syslog(LOG_INFO, "registered cleaning policy: %s", policy->name);
+	return 0;
+}
+
+struct nilfs_cleaning_policy *nilfs_get_policy(const char *name)
+{
+	int i;
+	
+	for (i = 0; i < num_registered_policies; i++) {
+		if (strcmp(registered_policies[i]->name, name) == 0)
+			return registered_policies[i];
+	}
+	
+	syslog(LOG_WARNING, "policy not found: %s", name);
+	return NULL;
+}
 
 static void nilfs_cleanerd_version(const char *progname)
 {
@@ -427,6 +400,7 @@ static struct nilfs_cleanerd *
 nilfs_cleanerd_create(const char *dev, const char *dir, const char *conffile)
 {
 	struct nilfs_cleanerd *cleanerd;
+  const char *policy_name;
 	int ret;
 
 	cleanerd = malloc(sizeof(*cleanerd));
@@ -457,6 +431,31 @@ nilfs_cleanerd_create(const char *dev, const char *dir, const char *conffile)
 	ret = nilfs_cleanerd_config(cleanerd, NULL);
 	if (unlikely(ret < 0))
 		goto out_conffile;
+
+    /* NEW: Load policy from config */
+	policy_name = cleanerd->config.cf_policy_name ? 
+		      cleanerd->config.cf_policy_name : "timestamp";
+  syslog(LOG_INFO, "using cleaning policy: %s", policy_name);
+	
+	/* Register built-in policies */
+	nilfs_register_policy(&nilfs_policy_timestamp);
+	nilfs_register_policy(&nilfs_policy_greedy);
+	nilfs_register_policy(&nilfs_policy_cost_benefit);
+
+	cleanerd->policy = nilfs_get_policy(policy_name);
+	if (cleanerd->policy == NULL) {
+		syslog(LOG_WARNING, "falling back to timestamp policy");
+		cleanerd->policy = &nilfs_policy_timestamp;
+	}
+	
+	/* Initialize policy if it has init function */
+	if (cleanerd->policy->init) {
+		ret = cleanerd->policy->init(cleanerd->policy, cleanerd);
+		if (ret < 0) {
+			syslog(LOG_ERR, "policy initialization failed");
+			goto out_conffile;
+		}
+	}
 
 	ret = nilfs_cleanerd_open_queue(cleanerd,
 					nilfs_get_dev(cleanerd->nilfs));
@@ -610,33 +609,35 @@ static int nilfs_shrink_protected_region(struct nilfs *nilfs)
 
 static ssize_t
 nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
-			       struct nilfs_sustat *sustat, uint64_t *segnums,
-			       int64_t *prottimep, int64_t *oldestp)
+			       struct nilfs_sustat *sustat, 
+			       uint64_t *segnums,
+			       int64_t *prottimep, 
+			       int64_t *oldestp)
 {
-	struct nilfs *nilfs;
-	struct nilfs_vector *smv;
-	struct nilfs_segimp *sm;
+	struct nilfs_cleaning_policy *policy = cleanerd->policy;
+	struct nilfs_vector *candidates;
+	struct nilfs_segment_candidate *cand;
 	struct nilfs_suinfo si[NILFS_CLEANERD_NSUINFO];
 	struct timespec ts, ts2;
-	int64_t prottime, oldest, lastmod, now;
+	int64_t prottime, oldest, now;
 	uint64_t segnum;
 	size_t count, nsegs;
 	ssize_t nssegs, n;
-	long long imp, thr;
-	int ret;
-	int i;
-
+	int ret, i, eligible;
+	
+	/* If policy has custom select function, use it */
+	if (policy->select)
+		return policy->select(policy, cleanerd, sustat, 
+				      segnums, prottimep, oldestp);
+	
+	/* Generic selection using policy's evaluate function */
 	nsegs = nilfs_cleanerd_ncleansegs(cleanerd);
-	nilfs = cleanerd->nilfs;
-
-	smv = nilfs_vector_create(sizeof(struct nilfs_segimp));
-	if (unlikely(!smv))
+	
+	candidates = nilfs_vector_create(sizeof(struct nilfs_segment_candidate));
+	if (unlikely(!candidates))
 		return -1;
-
-	/*
-	 * The segments that were more recently written to disk than
-	 * prottime are not selected.
-	 */
+	
+	/* Calculate protection time */
 	ret = clock_gettime(CLOCK_REALTIME, &ts);
 	if (unlikely(ret < 0)) {
 		nssegs = -1;
@@ -646,73 +647,67 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 	now = ts.tv_sec;
 	prottime = ts2.tv_sec;
 	oldest = NILFS_CLEANERD_NULLTIME;
-
-	/*
-	 * The segments that have larger importance than thr are not
-	 * selected.
-	 */
-	thr = sustat->ss_nongc_ctime;
-
+	
+	/* Evaluate all segments using policy */
 	for (segnum = 0; segnum < sustat->ss_nsegs; segnum += n) {
 		count = min_t(uint64_t, sustat->ss_nsegs - segnum,
 			      NILFS_CLEANERD_NSUINFO);
-		n = nilfs_get_suinfo(nilfs, segnum, si, count);
+		n = nilfs_get_suinfo(cleanerd->nilfs, segnum, si, count);
 		if (unlikely(n < 0)) {
 			nssegs = n;
 			goto out;
 		}
+		
 		for (i = 0; i < n; i++) {
 			if (!nilfs_suinfo_reclaimable(&si[i]))
 				continue;
-
-			/*
-			 * Use local variable 'lastmod' to treat the
-			 * segment timestamp as a signed type value.
-			 */
-			lastmod = si[i].sui_lastmod;
-
-			/*
-			 * Timestamp policy.  The importance value is
-			 * adjusted to include segments with a future
-			 * timestamp.
-			 */
-			imp = lastmod <= now ? lastmod : thr - 1;
-
-			if (imp < thr) {
-				if (lastmod < oldest)
-					oldest = lastmod;
-				if (lastmod < prottime || lastmod > now) {
-					sm = nilfs_vector_get_new_element(smv);
-					if (unlikely(sm == NULL)) {
-						nssegs = -1;
-						goto out;
-					}
-					sm->si_segnum = segnum + i;
-					sm->si_importance = imp;
-				}
+			
+			/* Track oldest segment */
+			if (si[i].sui_lastmod < oldest)
+				oldest = si[i].sui_lastmod;
+			
+			/* Ask policy to evaluate this segment */
+			cand = nilfs_vector_get_new_element(candidates);
+			if (unlikely(cand == NULL)) {
+				nssegs = -1;
+				goto out;
+			}
+			
+			eligible = policy->evaluate_segment(
+				policy, cleanerd, sustat, &si[i], 
+				segnum + i, now, prottime, cand);
+			
+			if (!eligible) {
+				/* Remove from vector if not eligible */
+				nilfs_vector_delete_element(candidates, 
+							    nilfs_vector_get_size(candidates) - 1);
 			}
 		}
-		if (unlikely(n == 0)) {
-			syslog(LOG_WARNING,
-			       "inconsistent number of segments: %llu (nsegs=%llu)",
-			       (unsigned long long)nilfs_vector_get_size(smv),
-			       (unsigned long long)sustat->ss_nsegs);
+		
+		if (unlikely(n == 0))
 			break;
-		}
 	}
-	nilfs_vector_sort(smv, nilfs_comp_segimp);
-
-	nssegs = min_t(size_t, nilfs_vector_get_size(smv), nsegs);
+	
+	/* Sort using policy's comparison function */
+	nilfs_vector_sort(candidates, policy->compare);
+	
+	/* Select top N segments */
+	nssegs = min_t(size_t, nilfs_vector_get_size(candidates), nsegs);
 	for (i = 0; i < nssegs; i++) {
-		sm = nilfs_vector_get_element(smv, i);
-		assert(sm != NULL);
-		segnums[i] = sm->si_segnum;
+		cand = nilfs_vector_get_element(candidates, i);
+		assert(cand != NULL);
+		segnums[i] = cand->segnum;
+		
+		/* Free policy metadata if allocated */
+		if (cand->metadata)
+			free(cand->metadata);
 	}
+	
 	*prottimep = prottime;
 	*oldestp = oldest;
-
- out:
-	nilfs_vector_destroy(smv);
+	
+out:
+	nilfs_vector_destroy(candidates);
 	return nssegs;
 }
 
@@ -1798,6 +1793,9 @@ int main(int argc, char *argv[])
 
 	openlog(progname, LOG_PID, LOG_DAEMON);
 	syslog(LOG_INFO, "start");
+
+  /* NEW: Register built-in policies */
+	nilfs_register_policy(&nilfs_policy_timestamp);
 
 	ret = oom_adjust();
 	if (unlikely(ret < 0))
