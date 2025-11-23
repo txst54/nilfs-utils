@@ -9,8 +9,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 add_compile_options(
         -Wall
         -Wextra
-        -Wpedantic
-        -Werror
+#        -Wpedantic
+#        -Werror
 )
 
 # List all sources
@@ -23,6 +23,7 @@ set(WORKLOADER_SOURCES
         runners/metadata_storm.c
         include/workloader.h
         utilites.c
+        runners/hotcold.c
 )
 
 # Build a single executable

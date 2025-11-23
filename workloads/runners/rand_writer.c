@@ -1,15 +1,5 @@
 #include "../include/workloader.h"
 
-// Simple deterministic xorshift64* RNG
-static uint64_t xorshift64star(uint64_t *state) {
-    uint64_t x = *state;
-    x ^= x >> 12;
-    x ^= x << 25;
-    x ^= x >> 27;
-    *state = x;
-    return x * 2685821657736338717ULL;
-}
-
 void run_rand_writer(const config_t* cfg) {
     char filepath[4096];
     snprintf(filepath, sizeof(filepath), "%s/rand_write.bin", cfg->path);

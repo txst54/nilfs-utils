@@ -17,6 +17,7 @@ typedef enum {
     TEST_APPEND,
     TEST_HOTSPOT,
     TEST_METADATA_STORM,
+    TEST_HOT_COLD,
     TEST_UNKNOWN
 } test_type_t;
 
@@ -45,5 +46,6 @@ void run_rand_writer(const config_t *);
 void run_append_writer(const config_t *);
 void run_hotspot_writer(const config_t *);
 void run_metadata_storm(const config_t *);
+void run_hot_cold_writer(const config_t *);
 
 #endif

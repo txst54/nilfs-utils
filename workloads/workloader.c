@@ -57,6 +57,7 @@ static test_type_t parse_test(const char *s) {
     if (strcmp(s, "append") == 0) return TEST_APPEND;
     if (strcmp(s, "hotspot") == 0) return TEST_HOTSPOT;
     if (strcmp(s, "storm") == 0) return TEST_METADATA_STORM;
+    if (strcmp(s, "hotcold") == 0) return TEST_HOT_COLD;
     return TEST_UNKNOWN;
 }
 
@@ -162,11 +163,12 @@ int main(int argc, char **argv) {
 
     // Dispatch
     switch (cfg.test) {
-        case TEST_SEQ:             run_seq_writer(&cfg); break;
-        case TEST_RAND:            run_rand_writer(&cfg); break;
-        case TEST_APPEND:          run_append_writer(&cfg); break;
-        case TEST_HOTSPOT:         run_hotspot_writer(&cfg); break;
-        case TEST_METADATA_STORM:  run_metadata_storm(&cfg); break;
+        case TEST_SEQ:              run_seq_writer(&cfg); break;
+        case TEST_RAND:             run_rand_writer(&cfg); break;
+        case TEST_APPEND:           run_append_writer(&cfg); break;
+        case TEST_HOTSPOT:          run_hotspot_writer(&cfg); break;
+        case TEST_METADATA_STORM:   run_metadata_storm(&cfg); break;
+        case TEST_HOT_COLD:         run_hot_cold_writer(&cfg); break;
         default:
             fprintf(stderr, "Invalid test type\n");
             exit(1);

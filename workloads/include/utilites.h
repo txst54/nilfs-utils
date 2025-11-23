@@ -6,4 +6,5 @@
 #include <stdlib.h>
 
 uint64_t now_usec (void);
+uint64_t xorshift64star(uint64_t *state);
 #endif
