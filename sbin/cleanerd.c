@@ -657,9 +657,13 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 
 		clock_gettime(CLOCK_REALTIME, &tnow);
 		localtime_r(&tnow.tv_sec, &tmnow);
+    struct nilfs_cldconfig *config = &cleanerd->config;
+    if (config->cf_log_file == NULL) {
+      config->cf_log_file = "/users/jeffxu/logs/";
+    }
 
 		snprintf(path, sizeof(path),
-				 "/users/jeffxu/logs/lssu-%04d%02d%02d-%02d%02d%02d.%03ld.log",
+				 "%slssu-%04d%02d%02d-%02d%02d%02d.%03ld.log", config->cf_log_file,
 				 tmnow.tm_year + 1900, tmnow.tm_mon + 1, tmnow.tm_mday,
 				 tmnow.tm_hour, tmnow.tm_min, tmnow.tm_sec,
 				 tnow.tv_nsec / 1000000);
@@ -670,6 +674,54 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 			setvbuf(logf, NULL, _IOFBF, 1 << 20);
 			fprintf(logf, "Segment Utilization Snapshot\n");
 			fprintf(logf, "============================\n");
+      // CLINT CHANGE: print live blocks and utilization for all segments
+      // Note: I am assuming we delete checkpoints except the most recent 
+      // one to match Ousterhout's implementation of LFS. 
+      // NILFS by default logs a checkpoint for every write, so utilization 
+      // will account for all blocks pointed to by checkpoints even if 
+      // they arent used currently. 
+      unsigned long nsegments, blocks_per_segment;
+      ssize_t live_blocks;
+      struct nilfs *nilfs = cleanerd->nilfs;
+      nsegments = nilfs_get_nsegments(nilfs);
+      blocks_per_segment = nilfs_get_blocks_per_segment(nilfs);
+
+      printf("Total Segments: %lu\n", nsegments);
+      printf("Blocks per Segment: %lu\n", blocks_per_segment);
+      printf("SEGNUM\tLIVE_BLKS\tUTILIZATION\tSTATUS\n");
+
+      // 3. Iterate over all segments
+      for (segnum = 0; segnum < nsegments; segnum++) {
+          
+          // PARAMETERS:
+          // protseq = 0: We don't want to filter by protection sequence (time)
+          // protcno = NILFS_CNO_MAX: Consider ALL checkpoints valid.
+          struct nilfs_reclaim_stat stat;
+          struct nilfs_reclaim_params params = {
+            .flags = NILFS_RECLAIM_PARAM_PROTSEQ,
+            .protseq = 0
+          };
+          uint64_t segnums[1];
+
+          memset(&stat, 0, sizeof(stat));
+	        segnums[0] = segnum;
+          int ret = nilfs_assess_segment(nilfs, segnums, 1, &params, &stat);
+          live_blocks = stat.protected_segs > 0 ? -2 : stat.live_blks;
+
+          if (live_blocks >= 0) {
+              double util = (double)live_blocks / blocks_per_segment * 100.0;
+              printf("%lu\t%zd\t\t%.2f%%\t\tCLEANABLE\n", segnum, live_blocks, util);
+          } 
+          else if (live_blocks == -2) {
+              // "Protected" means it contains data recently written or held by a snapshot
+              // For Ousterhout's math, this is effectively 100% utilization (cannot be cleaned)
+              printf("%lu\t-\t\t100.00%%\tPROTECTED\n", segnum);
+          } 
+          else {
+              fprintf(stderr, "Error accessing segment %lu\n", segnum);
+          }
+      }
+      // END CLINT CHANGE
 		}
 	}
 	/* Evaluate all segments using policy */

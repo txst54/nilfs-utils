@@ -76,6 +76,7 @@ struct nilfs_cldconfig {
 	int cf_selection_policy;
 	struct timespec cf_protection_period;
   const char* cf_policy_name;
+  const char* cf_log_file;
 	uint64_t cf_min_clean_segments;
 	uint64_t cf_max_clean_segments;
 	struct timespec cf_clean_check_interval;
