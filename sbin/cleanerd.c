@@ -647,12 +647,48 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 	now = ts.tv_sec;
 	prottime = ts2.tv_sec;
 	oldest = NILFS_CLEANERD_NULLTIME;
-	
+
+	/* JEFF CHANGE */
+	FILE *logf = NULL;
+	{
+		struct timespec tnow;
+		struct tm tmnow;
+		char path[512];
+
+		clock_gettime(CLOCK_REALTIME, &tnow);
+		localtime_r(&tnow.tv_sec, &tmnow);
+
+		snprintf(path, sizeof(path),
+				 "/users/jeffxu/logs/lssu-%04d%02d%02d-%02d%02d%02d.%03ld.log",
+				 tmnow.tm_year + 1900, tmnow.tm_mon + 1, tmnow.tm_mday,
+				 tmnow.tm_hour, tmnow.tm_min, tmnow.tm_sec,
+				 tnow.tv_nsec / 1000000);
+
+		logf = fopen(path, "w");
+		if (logf) {
+			/* big buffer = fast logging */
+			setvbuf(logf, NULL, _IOFBF, 1 << 20);
+			fprintf(logf, "Segment Utilization Snapshot\n");
+			fprintf(logf, "============================\n");
+		}
+	}
 	/* Evaluate all segments using policy */
 	for (segnum = 0; segnum < sustat->ss_nsegs; segnum += n) {
 		count = min_t(uint64_t, sustat->ss_nsegs - segnum,
 			      NILFS_CLEANERD_NSUINFO);
 		n = nilfs_get_suinfo(cleanerd->nilfs, segnum, si, count);
+		/* JEFF CHANGE */
+		if (logf) {
+			for (i = 0; i < n; i++) {
+				uint64_t s = segnum + i;
+				fprintf(logf,
+						"seg=%llu live_blocks=%u lastmod=%llu flags=0x%x\n",
+						(unsigned long long)s,
+						si[i].sui_nblocks,
+						(unsigned long long)si[i].sui_lastmod,
+						si[i].sui_flags);
+			}
+		}
 		if (unlikely(n < 0)) {
 			nssegs = n;
 			goto out;
@@ -708,6 +744,8 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 	
 out:
 	nilfs_vector_destroy(candidates);
+	if (logf)
+		fclose(logf);
 	return nssegs;
 }
 
