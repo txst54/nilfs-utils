@@ -662,14 +662,16 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
       config->cf_log_file = "/users/jeffxu/logs/";
     }
 
-		snprintf(path, sizeof(path),
-				 "%slssu-%04d%02d%02d-%02d%02d%02d.%03ld.log", config->cf_log_file,
-				 tmnow.tm_year + 1900, tmnow.tm_mon + 1, tmnow.tm_mday,
-				 tmnow.tm_hour, tmnow.tm_min, tmnow.tm_sec,
-				 tnow.tv_nsec / 1000000);
+		// snprintf(path, sizeof(path),
+		// 		 "%slssu-%04d%02d%02d-%02d%02d%02d.%03ld.log", config->cf_log_file,
+		// 		 tmnow.tm_year + 1900, tmnow.tm_mon + 1, tmnow.tm_mday,
+		// 		 tmnow.tm_hour, tmnow.tm_min, tmnow.tm_sec,
+		// 		 tnow.tv_nsec / 1000000);
+    snprintf(path, sizeof(path),
+				 "%sdata.log", config->cf_log_file);
     syslog(LOG_INFO, "writing segment utilization log to %s", path);
 
-		logf = fopen(path, "w");
+		logf = fopen(path, "a");
 		if (logf) {
 			/* big buffer = fast logging */
 			setvbuf(logf, NULL, _IOFBF, 1 << 20);
@@ -707,6 +709,13 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 
       // 3. Iterate over all segments
       for (segnum = 0; segnum < nsegments; segnum++) {
+          struct nilfs_suinfo si;
+          if (nilfs_get_suinfo(nilfs, segnum, &si, 1) != 1) {
+              fprintf(stderr, "Error accessing segment %lu\n", segnum);
+              continue;
+          }
+          if (nilfs_suinfo_clean(&si))
+            continue;  // skip clean segments
           
           // PARAMETERS:
           // protseq = 0: We don't want to filter by protection sequence (time)
