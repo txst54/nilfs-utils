@@ -105,6 +105,59 @@ static int nilfs_comp_bdesc(const void *elem1, const void *elem2)
 }
 
 /**
+ * assess_segment_if_dirty - assess a single NILFS segment if it is not clean
+ * @nilfs: Pointer to the nilfs object
+ * @sustat: Pointer to segment usage stats (for protection info)
+ * @segnum: Segment number to assess
+ * @protcno: Checkpoint number threshold (usually NILFS_CNO_MAX)
+ * @stat: Output reclaim statistics for the segment
+ *
+ * Returns:
+ *   1  if segment was dirty and successfully assessed,
+ *   0  if segment was clean and skipped,
+ *  -1  if there was an error accessing or assessing the segment.
+ */
+int assess_segment_if_dirty(struct nilfs *nilfs,
+                            const struct nilfs_sustat *sustat,
+                            uint64_t segnum,
+                            uint64_t protcno,
+                            struct nilfs_reclaim_stat *stat)
+{
+    struct nilfs_suinfo si;
+    struct nilfs_reclaim_params params;
+    uint64_t segnums[1];
+    int ret;
+
+    // Fetch segment usage info
+    if (nilfs_get_suinfo(nilfs, segnum, &si, 1) != 1) {
+        fprintf(stderr, "Error accessing segment %lu\n", segnum);
+        return -1;
+    }
+
+    // Skip clean segments
+    if (nilfs_suinfo_clean(&si))
+        return 0;
+
+    // Set up reclaim parameters
+    memset(&params, 0, sizeof(params));
+    params.flags = NILFS_RECLAIM_PARAM_PROTSEQ | NILFS_RECLAIM_PARAM_PROTCNO;
+    params.protseq = sustat->ss_prot_seq;
+    params.protcno = protcno;
+
+    // Assess segment
+    memset(stat, 0, sizeof(*stat));
+    segnums[0] = segnum;
+    ret = nilfs_assess_segment(nilfs, segnums, 1, &params, stat);
+
+    if (ret < 0) {
+        fprintf(stderr, "Error assessing segment %lu\n", segnum);
+        return -1;
+    }
+
+    return 1; // success, dirty segment assessed
+}
+
+/**
  * nilfs_acc_blocks_file - collect summary of blocks in a file
  * @file: file object
  * @vdescv: vector object to store (descriptors of) virtual block numbers

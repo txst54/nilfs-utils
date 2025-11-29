@@ -64,6 +64,12 @@ struct nilfs_reclaim_stat {
 	size_t freed_vblks;
 };
 
+int assess_segment_if_dirty(struct nilfs *nilfs,
+                            const struct nilfs_sustat *sustat,
+                            uint64_t segnum,
+                            uint64_t protcno,
+                            struct nilfs_reclaim_stat *stat);
+
 ssize_t nilfs_reclaim_segment(struct nilfs *nilfs,
 			      uint64_t *segnums, size_t nsegs,
 			      uint64_t protseq, nilfs_cno_t protcno);

@@ -33,8 +33,33 @@ static int cb_evaluate(struct nilfs_cleaning_policy *policy,
 		       int64_t prottime,
 		       struct nilfs_segment_candidate *candidate)
 {
+  struct nilfs_reclaim_stat stat;
+  struct nilfs *nilfs = cleanerd->nilfs;
+  nilfs_cno_t protcno;
+  struct nilfs_cnormap *cnormap = cleanerd->cnormap;
+  int ret;
+  ret = nilfs_cnormap_track_back(cnormap, 0, &protcno);
+  memset(&stat, 0, sizeof(stat));
+  ret = assess_segment_if_dirty(
+    nilfs,
+    sustat,
+    segnum,
+    protcno,
+    &stat
+  );
+  if (!ret) {
+    return 0; // segment is clean, not eligible
+  } else if (ret < 0) {
+    syslog(LOG_ERR, "error assessing segment %llu", (unsigned long long)segnum);
+    return 0; // on error, treat as not eligible
+  }
+  ssize_t live_blocks = stat.live_blks;
+  if (live_blocks < 0) {
+    return 0; // protected segment, not eligible
+  }
+
 	uint32_t blocks_per_segment = nilfs_get_blocks_per_segment(cleanerd->nilfs);
-	double u = (double)si->sui_nblocks / blocks_per_segment;
+	double u = (double)live_blocks / blocks_per_segment;
 	int64_t age = now - si->sui_lastmod;
 	
 	if (si->sui_lastmod >= prottime && si->sui_lastmod <= now)

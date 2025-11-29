@@ -685,13 +685,14 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
       // they arent used currently. 
       unsigned long nsegments, blocks_per_segment;
       ssize_t live_blocks;
-      struct nilfs *nilfs = cleanerd->nilfs;
-      nsegments = nilfs_get_nsegments(nilfs);
-      struct nilfs_sustat sustat;
-      blocks_per_segment = nilfs_get_blocks_per_segment(nilfs);
-      struct nilfs_cnormap *cnormap = cleanerd->cnormap;
       nilfs_cno_t protcno;
-      int ret = nilfs_cnormap_track_back(cnormap, 0, &protcno);
+      struct nilfs_sustat sustat;
+      int ret;
+      struct nilfs *nilfs = cleanerd->nilfs;
+      struct nilfs_cnormap *cnormap = cleanerd->cnormap;
+      nsegments = nilfs_get_nsegments(nilfs);
+      blocks_per_segment = nilfs_get_blocks_per_segment(nilfs);
+      ret = nilfs_cnormap_track_back(cnormap, 0, &protcno);
       if (ret < 0) {
         syslog(LOG_ERR, "error getting current checkpoint number");
         fclose(logf);
@@ -709,28 +710,18 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 
       // 3. Iterate over all segments
       for (segnum = 0; segnum < nsegments; segnum++) {
-          struct nilfs_suinfo si;
-          if (nilfs_get_suinfo(nilfs, segnum, &si, 1) != 1) {
-              fprintf(stderr, "Error accessing segment %lu\n", segnum);
+          struct nilfs_reclaim_stat stat;
+          ret = assess_segment_if_dirty(
+            nilfs,
+            &sustat,
+            segnum,
+            protcno,
+            &stat
+          );
+          if (!ret) {
+              // Segment is clean, skip
               continue;
           }
-          if (nilfs_suinfo_clean(&si))
-            continue;  // skip clean segments
-          
-          // PARAMETERS:
-          // protseq = 0: We don't want to filter by protection sequence (time)
-          // protcno = NILFS_CNO_MAX: Consider ALL checkpoints valid.
-          struct nilfs_reclaim_stat stat;
-          struct nilfs_reclaim_params params = {
-            .flags = NILFS_RECLAIM_PARAM_PROTSEQ | NILFS_RECLAIM_PARAM_PROTCNO,
-            .protseq = sustat.ss_prot_seq,
-            .protcno = protcno
-          };
-          uint64_t segnums[1];
-
-          memset(&stat, 0, sizeof(stat));
-	        segnums[0] = segnum;
-          int ret = nilfs_assess_segment(nilfs, segnums, 1, &params, &stat);
           live_blocks = stat.live_blks;
 
           if (live_blocks >= 0) {
