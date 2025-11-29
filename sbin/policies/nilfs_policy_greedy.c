@@ -33,8 +33,28 @@ static int greedy_evaluate(struct nilfs_cleaning_policy *policy,
 			   int64_t prottime,
 			   struct nilfs_segment_candidate *candidate)
 {
+  struct nilfs_reclaim_stat stat;
+  struct nilfs *nilfs = cleanerd->nilfs;
+  nilfs_cno_t protcno;
+  struct nilfs_cnormap *cnormap = cleanerd->cnormap;
+  int ret;
+  ret = nilfs_cnormap_track_back(cnormap, 0, &protcno);
+  memset(&stat, 0, sizeof(stat));
+  ret = assess_segment_if_dirty(
+    nilfs,
+    sustat,
+    segnum,
+    protcno,
+    &stat
+  );
+  if (!ret) {
+    return 0; // segment is clean, not eligible
+  } else if (ret < 0) {
+    syslog(LOG_ERR, "error assessing segment %llu", (unsigned long long)segnum);
+    return 0; // on error, treat as not eligible
+  }
+  ssize_t live_blocks = stat.live_blks;
 	uint32_t blocks_per_segment = nilfs_get_blocks_per_segment(cleanerd->nilfs);
-	uint32_t nblocks = si->sui_nblocks;
 	
 	if (si->sui_lastmod >= prottime && si->sui_lastmod <= now)
 		return 0;  /* Protected */
@@ -42,7 +62,7 @@ static int greedy_evaluate(struct nilfs_cleaning_policy *policy,
 	/* Greedy policy: score is number of reclaimable blocks */
 	/* Reclaimable = Total - Live */
 	candidate->segnum = segnum;
-	candidate->score = (double)(blocks_per_segment - nblocks);
+	candidate->score = (double)(blocks_per_segment - live_blocks);
 	candidate->metadata = NULL;
 	
 	return 1;  /* Eligible */
