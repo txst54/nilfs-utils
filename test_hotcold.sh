@@ -3,9 +3,9 @@
 # Configuration
 MOUNT_POINT="/mnt/nilfs"      # CHANGE THIS
 DIR_NAME="lfs_hot_cold"
-FILE_SIZE_KB=32
+FILE_SIZE_KB=1024
 NUM_FILES=1024                # same as before
-HOT_RATIO=80                  # % of writes that land in hot region
+HOT_RATIO=90                  # % of writes that land in hot region
 HOT_RANGE=128                 # hot region size (12.5% of 1024)
 TARGET_DIR="$MOUNT_POINT/$DIR_NAME"
 
@@ -58,7 +58,9 @@ while true; do
 
     ((count++))
 
-    if (( count % 50 == 0 )); then
+    sleep 0.1
+
+    if (( count % 20 == 0 )); then
         sync
         nilfs-clean -p 0
     fi

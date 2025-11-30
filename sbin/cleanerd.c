@@ -763,7 +763,7 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 
   char mnt_path[512];
   snprintf(mnt_path, sizeof(mnt_path),
-          "/root/nilfs_mnt");
+          "/mnt/nilfs");
 	
 	/* Select top N segments */
 	nssegs = min_t(size_t, nilfs_vector_get_size(candidates), nsegs);
