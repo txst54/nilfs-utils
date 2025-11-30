@@ -376,13 +376,31 @@ nilfs_cldconfig_handle_selection_policy_timestamp(struct nilfs_cldconfig *cf,
 						  char **tokens, size_t ntoks)
 {
 	cf->cf_selection_policy = NILFS_SELECTION_POLICY_TIMESTAMP;
+	cf->cf_policy_name = "timestamp";
+	return 0;
+}
+
+static int nilfs_cldconfig_handle_selection_policy_greedy(struct nilfs_cldconfig *cf,
+						  char **tokens, size_t ntoks){
+	cf->cf_selection_policy = NILFS_SELECTION_POLICY_GREEDY;
+	cf->cf_policy_name = "greedy";
+	return 0;
+}
+
+static int nilfs_cldconfig_handle_selection_policy_cost_benefit(struct nilfs_cldconfig *cf,
+						  char **tokens, size_t ntoks){
+	cf->cf_selection_policy = NILFS_SELECTION_POLICY_COST_BENEFIT;
+	cf->cf_policy_name = "cost-benefit";
 	return 0;
 }
 
 static const struct nilfs_cldconfig_polhandle
 nilfs_cldconfig_polhandle_table[] = {
-	{"timestamp",	nilfs_cldconfig_handle_selection_policy_timestamp},
+	{"timestamp",      nilfs_cldconfig_handle_selection_policy_timestamp},
+	{"greedy",         nilfs_cldconfig_handle_selection_policy_greedy},
+	{"cost-benefit",   nilfs_cldconfig_handle_selection_policy_cost_benefit},
 };
+
 
 #define NILFS_CLDCONFIG_NPOLHANDLES			\
 	(sizeof(nilfs_cldconfig_polhandle_table) /		\

@@ -434,13 +434,8 @@ nilfs_cleanerd_create(const char *dev, const char *dir, const char *conffile)
 
     /* NEW: Load policy from config */
 	policy_name = cleanerd->config.cf_policy_name ? 
-		      cleanerd->config.cf_policy_name : "timestamp";
+		      cleanerd->config.cf_policy_name : "canary garbage";
   syslog(LOG_INFO, "using cleaning policy: %s", policy_name);
-	
-	/* Register built-in policies */
-	nilfs_register_policy(&nilfs_policy_timestamp);
-	nilfs_register_policy(&nilfs_policy_greedy);
-	nilfs_register_policy(&nilfs_policy_cost_benefit);
 
 	cleanerd->policy = nilfs_get_policy(policy_name);
 	if (cleanerd->policy == NULL) {
@@ -1905,6 +1900,8 @@ int main(int argc, char *argv[])
 
   /* NEW: Register built-in policies */
 	nilfs_register_policy(&nilfs_policy_timestamp);
+	nilfs_register_policy(&nilfs_policy_greedy);
+	nilfs_register_policy(&nilfs_policy_cost_benefit);
 
 	ret = oom_adjust();
 	if (unlikely(ret < 0))

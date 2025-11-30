@@ -14,7 +14,7 @@ MOUNT_POINT="/mnt/nilfs"   # Correct this to your actual mount
 POLICIES=("timestamp" "greedy" "cost-benefit")
 
 # Workload scripts
-WORKLOADS=("test_hotcold.sh" "test_rand.sh")
+WORKLOADS=("test_hotcold.sh")
 
 # Test harness script
 TEST_MODEL="./test_model.sh"
@@ -39,9 +39,7 @@ set_policy() {
     fi
 
     echo "[+] Setting cleaner policy to: $policy"
-    sudo sed -Ei \
-  "s|^selection_policy[[:space:]]+[A-Za-z0-9_-]+|selection_policy\t$policy\t|" \
-  "$CLEANER_CONF"
+    sudo sed -Ei 's/^selection_policy.*/selection_policy '"$policy"'/' "$CLEANER_CONF"
 
 }
 
@@ -53,7 +51,7 @@ start_cleaner() {
     sudo pkill -9 -f "$CLEANER_BIN" 2>/dev/null
 
     echo "[+] Starting cleaner daemon"
-    sudo "$CLEANER_BIN" -p 0 "$DEVICE" "$MOUNT_POINT" >/dev/null 2>&1 &
+    sudo "$CLEANER_BIN" -p 0 -c "$CLEANER_CONF" "$DEVICE" "$MOUNT_POINT" >/dev/null 2>&1 &
 
     # Give the daemon time to fork twice and detach
     sleep 0.3
