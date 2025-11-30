@@ -620,6 +620,7 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 	ssize_t nssegs, n;
 	int ret, i, eligible;
 	
+  syslog(LOG_INFO, "selecting segments to clean using policy: %s", policy->name);
 	/* If policy has custom select function, use it */
 	if (policy->select)
 		return policy->select(policy, cleanerd, sustat, 
