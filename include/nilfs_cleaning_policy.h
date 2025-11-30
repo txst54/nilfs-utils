@@ -67,6 +67,7 @@ struct nilfs_cleaning_policy {
 extern struct nilfs_cleaning_policy nilfs_policy_timestamp;
 extern struct nilfs_cleaning_policy nilfs_policy_cost_benefit;
 extern struct nilfs_cleaning_policy nilfs_policy_greedy;
+extern struct nilfs_cleaning_policy nilfs_policy_hot_cold;
 
 /* Policy registration */
 int nilfs_register_policy(struct nilfs_cleaning_policy *policy);

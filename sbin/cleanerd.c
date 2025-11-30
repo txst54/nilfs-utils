@@ -1902,6 +1902,7 @@ int main(int argc, char *argv[])
 	nilfs_register_policy(&nilfs_policy_timestamp);
 	nilfs_register_policy(&nilfs_policy_greedy);
 	nilfs_register_policy(&nilfs_policy_cost_benefit);
+  nilfs_register_policy(&nilfs_policy_hot_cold);
 
 	ret = oom_adjust();
 	if (unlikely(ret < 0))
