@@ -761,30 +761,41 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
           "%swrite_cost.log", config->cf_log_file);
   syslog(LOG_INFO, "writing segment utilization log to %s", path);
 
-  logf = fopen(path, "a");
-  if (logf) {
-		setvbuf(logf, NULL, _IOFBF, 1 << 20);
-  }
+  char mnt_path[512];
+  snprintf(mnt_path, sizeof(mnt_path),
+          "/root/nilfs_mnt");
 	
 	/* Select top N segments */
 	nssegs = min_t(size_t, nilfs_vector_get_size(candidates), nsegs);
+
+  FILE *logw = NULL;
+  logw = fopen(path, "a");
+  char wr_logw = 0;
+  if (logw) {
+		setvbuf(logw, NULL, _IOFBF, 1 << 20);
+    wr_logw = 1;
+  }
 	for (i = 0; i < nssegs; i++) {
 		cand = nilfs_vector_get_element(candidates, i);
 		assert(cand != NULL);
 		segnums[i] = cand->segnum;
     
-    #include <sys/statvfs.h>
-    struct statvfs stat;
+    if (wr_logw) {
+      #include <sys/statvfs.h>
+      struct statvfs stat;
 
-    if (statvfs(path, &stat) != 0) {
-        perror("statvfs failed");
-        return -1.0;
+      if (statvfs(mnt_path, &stat) != 0) {
+          perror("statvfs failed");
+          return -1.0;
+      }
+      unsigned long total_blocks = stat.f_blocks;
+      unsigned long available_blocks = stat.f_bavail;
+      unsigned long used_blocks = total_blocks - available_blocks;
+      double disk_utilization = (double)used_blocks / (double)total_blocks;
+      fprintf(logw, "%lu,%.3f,%.3f\n", cand->segnum, 2.0/(1.0-cand->util), disk_utilization);
+    } else {
+      syslog(LOG_INFO, "Not logging write cost, log file not opened");
     }
-    unsigned long total_blocks = stat.f_blocks;
-    unsigned long available_blocks = stat.f_bavail;
-    unsigned long used_blocks = total_blocks - available_blocks;
-    double disk_utilization = (double)used_blocks / (double)total_blocks;
-    fprintf(logf, "%lu,%.3f,%.3f\n", cand->segnum, 2.0/(1.0-cand->util), disk_utilization);
 		
 		/* Free policy metadata if allocated */
 		if (cand->metadata)
@@ -798,6 +809,8 @@ out:
 	nilfs_vector_destroy(candidates);
 	if (logf)
 		fclose(logf);
+  if (wr_logw)
+    fclose(logw);
 	return nssegs;
 }
 
