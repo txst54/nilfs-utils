@@ -76,7 +76,7 @@ static int cb_evaluate(struct nilfs_cleaning_policy *policy,
 	candidate->segnum = segnum;
 	candidate->score = (1.0 - u) * age / (1.0 + u);
 	candidate->metadata = NULL;
-	
+	if (candidate->score <= 1) return 0;
 	return 1;  /* Eligible */
 }
 
