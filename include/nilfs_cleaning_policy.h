@@ -18,6 +18,7 @@ struct nilfs_segment_candidate {
 	uint64_t segnum;
 	double score;
 	void *metadata;  /* Policy can store custom data here */
+  double util;
 };
 
 /**
@@ -72,5 +73,9 @@ extern struct nilfs_cleaning_policy nilfs_policy_hot_cold;
 /* Policy registration */
 int nilfs_register_policy(struct nilfs_cleaning_policy *policy);
 struct nilfs_cleaning_policy *nilfs_get_policy(const char *name);
+
+int nilfs_get_live_blk(struct nilfs_cleanerd *cleanerd,
+                         const struct nilfs_sustat *sustat,
+                         uint64_t segnum, ssize_t *live_blocks);
 
 #endif /* NILFS_CLEANING_POLICY_H */

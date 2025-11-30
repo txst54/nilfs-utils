@@ -647,23 +647,18 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 	FILE *logf = NULL;
 	{
 		char path[512];
-	    struct nilfs_cldconfig *config = &cleanerd->config;
-	    if (config->cf_log_file == NULL) {
-	      config->cf_log_file = "/var/log/nilfs/";
-	    }
-	    snprintf(path, sizeof(path),
-					 "%sdata.log", config->cf_log_file);
-	    syslog(LOG_INFO, "writing segment utilization log to %s", path);
+    struct nilfs_cldconfig *config = &cleanerd->config;
+    if (config->cf_log_file == NULL) {
+      config->cf_log_file = "/var/log/nilfs/";
+    }
+    snprintf(path, sizeof(path),
+          "%sdata.log", config->cf_log_file);
+    syslog(LOG_INFO, "writing segment utilization log to %s", path);
 
 		logf = fopen(path, "a");
 		if (logf) {
 			setvbuf(logf, NULL, _IOFBF, 1 << 20);
 			// CLINT CHANGE: print live blocks and utilization for all segments
-			// Note: I am assuming we delete checkpoints except the most recent
-			// one to match Ousterhout's implementation of LFS.
-			// NILFS by default logs a checkpoint for every write, so utilization
-			// will account for all blocks pointed to by checkpoints even if
-			// they arent used currently.
 			unsigned long nsegments, blocks_per_segment;
 			ssize_t live_blocks;
 			nilfs_cno_t protcno;
@@ -760,6 +755,16 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 	
 	/* Sort using policy's comparison function */
 	nilfs_vector_sort(candidates, policy->compare);
+  char path[512];
+  struct nilfs_cldconfig *config = &cleanerd->config;
+  snprintf(path, sizeof(path),
+          "%swrite_cost.log", config->cf_log_file);
+  syslog(LOG_INFO, "writing segment utilization log to %s", path);
+
+  logf = fopen(path, "a");
+  if (logf) {
+		setvbuf(logf, NULL, _IOFBF, 1 << 20);
+  }
 	
 	/* Select top N segments */
 	nssegs = min_t(size_t, nilfs_vector_get_size(candidates), nsegs);
@@ -767,6 +772,19 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 		cand = nilfs_vector_get_element(candidates, i);
 		assert(cand != NULL);
 		segnums[i] = cand->segnum;
+    
+    #include <sys/statvfs.h>
+    struct statvfs stat;
+
+    if (statvfs(path, &stat) != 0) {
+        perror("statvfs failed");
+        return -1.0;
+    }
+    unsigned long total_blocks = stat.f_blocks;
+    unsigned long available_blocks = stat.f_bavail;
+    unsigned long used_blocks = total_blocks - available_blocks;
+    double disk_utilization = (double)used_blocks / (double)total_blocks;
+    fprintf(logf, "%lu,%.3f,%.3f\n", cand->segnum, 2.0/(1.0-cand->util), disk_utilization);
 		
 		/* Free policy metadata if allocated */
 		if (cand->metadata)

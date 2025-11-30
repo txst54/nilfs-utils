@@ -39,6 +39,11 @@ static int timestamp_evaluate(struct nilfs_cleaning_policy *policy,
 	int64_t lastmod = si->sui_lastmod;
 	int64_t thr = sustat->ss_nongc_ctime;
 	int64_t imp;
+  ssize_t live_blocks;
+  if (nilfs_get_live_blk(cleanerd, sustat, segnum, &live_blocks) == 0 
+    || live_blocks < 0) {
+    return 0; // segment is clean or error, not eligible
+  }
 	
 	/* Timestamp policy logic */
 	imp = lastmod <= now ? lastmod : thr - 1;
@@ -53,6 +58,7 @@ static int timestamp_evaluate(struct nilfs_cleaning_policy *policy,
 	candidate->segnum = segnum;
 	candidate->score = -imp;  /* Negative so older = higher score */
 	candidate->metadata = NULL;
+  candidate->util = (double)live_blocks / (double)nilfs_get_blocks_per_segment(cleanerd->nilfs);
 	
 	return 1;  /* Eligible */
 }
