@@ -5,7 +5,7 @@
 # ======================
 MOUNT_POINT="/mnt/nilfs"   # change as needed
 DATA_LOG="/var/log/nilfs/data.log"
-WAIT_TIME=60              # workload runtime in seconds
+WAIT_TIME=120              # workload runtime in seconds
 
 usage() {
     echo "Usage: $0 -w <workload_script> -d <destination_csv>"

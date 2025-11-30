@@ -625,14 +625,14 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 	if (policy->select)
 		return policy->select(policy, cleanerd, sustat, 
 				      segnums, prottimep, oldestp);
-	
+
 	/* Generic selection using policy's evaluate function */
 	nsegs = nilfs_cleanerd_ncleansegs(cleanerd);
-	
+
 	candidates = nilfs_vector_create(sizeof(struct nilfs_segment_candidate));
 	if (unlikely(!candidates))
 		return -1;
-	
+
 	/* Calculate protection time */
 	ret = clock_gettime(CLOCK_REALTIME, &ts);
 	if (unlikely(ret < 0)) {
@@ -644,145 +644,112 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 	prottime = ts2.tv_sec;
 	oldest = NILFS_CLEANERD_NULLTIME;
 
-	/* JEFF CHANGE */
 	FILE *logf = NULL;
 	{
-		struct timespec tnow;
-		struct tm tmnow;
 		char path[512];
-
-		clock_gettime(CLOCK_REALTIME, &tnow);
-		localtime_r(&tnow.tv_sec, &tmnow);
-    struct nilfs_cldconfig *config = &cleanerd->config;
-    if (config->cf_log_file == NULL) {
-      config->cf_log_file = "/users/jeffxu/logs/";
-    }
-
-		// snprintf(path, sizeof(path),
-		// 		 "%slssu-%04d%02d%02d-%02d%02d%02d.%03ld.log", config->cf_log_file,
-		// 		 tmnow.tm_year + 1900, tmnow.tm_mon + 1, tmnow.tm_mday,
-		// 		 tmnow.tm_hour, tmnow.tm_min, tmnow.tm_sec,
-		// 		 tnow.tv_nsec / 1000000);
-    snprintf(path, sizeof(path),
-				 "%sdata.log", config->cf_log_file);
-    syslog(LOG_INFO, "writing segment utilization log to %s", path);
+	    struct nilfs_cldconfig *config = &cleanerd->config;
+	    if (config->cf_log_file == NULL) {
+	      config->cf_log_file = "/var/log/nilfs/";
+	    }
+	    snprintf(path, sizeof(path),
+					 "%sdata.log", config->cf_log_file);
+	    syslog(LOG_INFO, "writing segment utilization log to %s", path);
 
 		logf = fopen(path, "a");
 		if (logf) {
-			/* big buffer = fast logging */
 			setvbuf(logf, NULL, _IOFBF, 1 << 20);
-			// fprintf(logf, "Segment Utilization Snapshot\n");
-			// fprintf(logf, "============================\n");
-      // CLINT CHANGE: print live blocks and utilization for all segments
-      // Note: I am assuming we delete checkpoints except the most recent 
-      // one to match Ousterhout's implementation of LFS. 
-      // NILFS by default logs a checkpoint for every write, so utilization 
-      // will account for all blocks pointed to by checkpoints even if 
-      // they arent used currently. 
-      unsigned long nsegments, blocks_per_segment;
-      ssize_t live_blocks;
-      nilfs_cno_t protcno;
-      struct nilfs_sustat sustat;
-      int ret;
-      struct nilfs *nilfs = cleanerd->nilfs;
-      struct nilfs_cnormap *cnormap = cleanerd->cnormap;
-      nsegments = nilfs_get_nsegments(nilfs);
-      blocks_per_segment = nilfs_get_blocks_per_segment(nilfs);
-      ret = nilfs_cnormap_track_back(cnormap, 0, &protcno);
-      if (ret < 0) {
-        syslog(LOG_ERR, "error getting current checkpoint number");
-        fclose(logf);
-        logf = NULL;
-      }
-      if (nilfs_get_sustat(nilfs, &sustat) < 0) {
-        syslog(LOG_ERR, "error getting segment status");
-        fclose(logf);
-        logf = NULL;
-      }
+			// CLINT CHANGE: print live blocks and utilization for all segments
+			// Note: I am assuming we delete checkpoints except the most recent
+			// one to match Ousterhout's implementation of LFS.
+			// NILFS by default logs a checkpoint for every write, so utilization
+			// will account for all blocks pointed to by checkpoints even if
+			// they arent used currently.
+			unsigned long nsegments, blocks_per_segment;
+			ssize_t live_blocks;
+			nilfs_cno_t protcno;
+			struct nilfs_sustat sustat;
+			int ret;
+			struct nilfs *nilfs = cleanerd->nilfs;
+			struct nilfs_cnormap *cnormap = cleanerd->cnormap;
+			nsegments = nilfs_get_nsegments(nilfs);
+			blocks_per_segment = nilfs_get_blocks_per_segment(nilfs);
+			ret = nilfs_cnormap_track_back(cnormap, 0, &protcno);
+			if (ret < 0) {
+				syslog(LOG_ERR, "error getting current checkpoint number");
+				fclose(logf);
+				logf = NULL;
+			}
+			if (nilfs_get_sustat(nilfs, &sustat) < 0) {
+				syslog(LOG_ERR, "error getting segment status");
+				fclose(logf);
+				logf = NULL;
+			}
 
-      // printf("Total Segments: %lu\n", nsegments);
-      // printf("Blocks per Segment: %lu\n", blocks_per_segment);
-      // printf("SEGNUM\tLIVE_BLKS\tUTILIZATION\tSTATUS\n");
+			// 3. Iterate over all segments
+			for (segnum = 0; segnum < nsegments; segnum++) {
+			  struct nilfs_reclaim_stat stat;
+			  ret = assess_segment_if_dirty(
+			    nilfs,
+			    &sustat,
+			    segnum,
+			    protcno,
+			    &stat
+			  );
+			  if (!ret) {
+			      // Segment is clean, skip
+			      continue;
+			  }
+			  live_blocks = stat.live_blks;
 
-      // 3. Iterate over all segments
-      for (segnum = 0; segnum < nsegments; segnum++) {
-          struct nilfs_reclaim_stat stat;
-          ret = assess_segment_if_dirty(
-            nilfs,
-            &sustat,
-            segnum,
-            protcno,
-            &stat
-          );
-          if (!ret) {
-              // Segment is clean, skip
-              continue;
-          }
-          live_blocks = stat.live_blks;
-
-          if (live_blocks >= 0) {
-              double util = (double)live_blocks / blocks_per_segment * 100.0;
-              fprintf(logf, "%lu,%zd,%.2f\n", segnum, live_blocks, util);
-          } 
-          else if (live_blocks == -2) {
-              // "Protected" means it contains data recently written or held by a snapshot
-              // For Ousterhout's math, this is effectively 100% utilization (cannot be cleaned)
-              fprintf(logf, "%lu,%zd,100.00\n", segnum, live_blocks);
-          } 
-          else {
-              fprintf(stderr, "Error accessing segment %lu\n", segnum);
-          }
-      }
-      // END CLINT CHANGE
-		}
-    else {
-      syslog(LOG_INFO, "failed to open log file: %s", path);
-    }
+			  if (live_blocks >= 0) {
+			      double util = (double)live_blocks / blocks_per_segment * 100.0;
+			      fprintf(logf, "%lu,%zd,%.2f\n", segnum, live_blocks, util);
+			  }
+			  else if (live_blocks == -2) {
+			      // "Protected" means it contains data recently written or held by a snapshot
+			      // For Ousterhout's math, this is effectively 100% utilization (cannot be cleaned)
+			      fprintf(logf, "%lu,%zd,100.00\n", segnum, live_blocks);
+			  }
+			  else {
+			      fprintf(stderr, "Error accessing segment %lu\n", segnum);
+			  }
+			}
+		} else {
+	    	syslog(LOG_INFO, "failed to open log file: %s", path);
+	    }
 	}
 	/* Evaluate all segments using policy */
 	for (segnum = 0; segnum < sustat->ss_nsegs; segnum += n) {
 		count = min_t(uint64_t, sustat->ss_nsegs - segnum,
 			      NILFS_CLEANERD_NSUINFO);
 		n = nilfs_get_suinfo(cleanerd->nilfs, segnum, si, count);
-		/* JEFF CHANGE */
-		if (logf) {
-			for (i = 0; i < n; i++) {
-				uint64_t s = segnum + i;
-				// fprintf(logf,
-				// 		"seg=%llu live_blocks=%u lastmod=%llu flags=0x%x\n",
-				// 		(unsigned long long)s,
-				// 		si[i].sui_nblocks,
-				// 		(unsigned long long)si[i].sui_lastmod,
-				// 		si[i].sui_flags);
-			}
-		}
 		if (unlikely(n < 0)) {
 			nssegs = n;
 			goto out;
 		}
-		
+
 		for (i = 0; i < n; i++) {
 			if (!nilfs_suinfo_reclaimable(&si[i]))
 				continue;
-			
+
 			/* Track oldest segment */
 			if (si[i].sui_lastmod < oldest)
 				oldest = si[i].sui_lastmod;
-			
+
 			/* Ask policy to evaluate this segment */
 			cand = nilfs_vector_get_new_element(candidates);
 			if (unlikely(cand == NULL)) {
 				nssegs = -1;
 				goto out;
 			}
-			
+
 			eligible = policy->evaluate_segment(
-				policy, cleanerd, sustat, &si[i], 
+				policy, cleanerd, sustat, &si[i],
 				segnum + i, now, prottime, cand);
-			
+
 			if (!eligible) {
 				/* Remove from vector if not eligible */
-				nilfs_vector_delete_element(candidates, 
+				nilfs_vector_delete_element(candidates,
 							    nilfs_vector_get_size(candidates) - 1);
 			}
 		}

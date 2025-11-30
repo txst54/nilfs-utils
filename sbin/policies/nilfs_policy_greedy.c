@@ -58,6 +58,13 @@ static int greedy_evaluate(struct nilfs_cleaning_policy *policy,
 	
 	if (si->sui_lastmod >= prottime && si->sui_lastmod <= now)
 		return 0;  /* Protected */
+
+	double util = (double)live_blocks / (double)blocks_per_segment;
+	double UTIL_THRESHOLD = 0.60;  /* 60% live blocks allowed */
+
+	if (util > UTIL_THRESHOLD) {
+		return 0;  /* Too full → skip segment */
+	}
 	
 	/* Greedy policy: score is number of reclaimable blocks */
 	/* Reclaimable = Total - Live */

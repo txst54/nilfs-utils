@@ -59,7 +59,7 @@ while true; do
 
     # Every 100 writes, sync to force a checkpoint/segment flush
     # This ensures the cleaner sees the changes
-    if (( count % 10 == 0 )); then
+    if (( count % 50 == 0 )); then
         sync
         nilfs-clean -p 0
     fi

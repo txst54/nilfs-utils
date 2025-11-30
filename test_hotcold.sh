@@ -58,7 +58,7 @@ while true; do
 
     ((count++))
 
-    if (( count % 10 == 0 )); then
+    if (( count % 50 == 0 )); then
         sync
         nilfs-clean -p 0
     fi
