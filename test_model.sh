@@ -5,7 +5,7 @@
 # ======================
 MOUNT_POINT="/mnt/nilfs"        # change as needed
 DATA_LOG="/var/log/nilfs/data.log"
-NUM_WRITES=30000                # default number of writes, replace WAIT_TIME
+NUM_WRITES=1000000                # default number of writes, replace WAIT_TIME
 
 usage() {
     echo "Usage: $0 -w <workload_script> -d <destination_csv> [-n NUM_WRITES]"
