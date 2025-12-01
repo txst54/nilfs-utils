@@ -1601,6 +1601,7 @@ static int nilfs_cleanerd_check_state(struct nilfs_cleanerd *cleanerd,
 			return 1; /* fs not updated -> sleep */
 		}
 	}
+
 	return 0; /* do gc */
 }
 

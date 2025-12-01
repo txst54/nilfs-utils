@@ -34,7 +34,7 @@ static int cb_evaluate(struct nilfs_cleaning_policy *policy,
 		       struct nilfs_segment_candidate *candidate)
 {
   ssize_t live_blocks;
-  if (nilfs_get_live_blk(cleanerd, sustat, segnum, &live_blocks) == 0 
+  if (nilfs_get_live_blk(cleanerd, sustat, segnum, &live_blocks) == 0
     || live_blocks < 0) {
     return 0; // segment is clean or error, not eligible
   }
@@ -57,8 +57,8 @@ static int cb_evaluate(struct nilfs_cleaning_policy *policy,
 	candidate->segnum = segnum;
 	candidate->score = (1.0 - u) * age / (1.0 + u);
 	candidate->metadata = NULL;
-  candidate->util = u;
-		return 1;  /* Eligible */
+	candidate->util = u;
+	return 1;  /* Eligible */
 }
 
 /* Policy definition */

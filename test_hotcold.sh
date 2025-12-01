@@ -81,6 +81,10 @@ echo "=============================================="
 count=0
 clean_interval=1000     # keep your old value unless you change it explicitly
 
+CHECK_INTERVAL=200     # check every 200 writes
+HIGH_WM=40             # start GC if >= 40 used segments
+LOW_WM=30              # stop GC once below 30 used segments
+
 while (( count < NUM_WRITES )); do
     r=$((RANDOM % 100))
 
@@ -95,9 +99,31 @@ while (( count < NUM_WRITES )); do
 
     ((count++))
 
-    if (( count % clean_interval == 0 )); then
-        sync
-        nilfs-clean -p 0
+    if (( count % CHECK_INTERVAL == 0 )); then
+        sync  # force checkpoint, ensures cleaner can act
+
+        # Count in-use segments (segments with NBLOCKS > 0)
+        USED_SEGS=$(lssu /dev/sda4 | awk 'NR>1 && $5 > 0 {c++} END {print c+0}')
+
+#        echo "[debug] after $count writes: used segments = $USED_SEGS"
+
+        # High watermark check
+        if (( USED_SEGS >= HIGH_WM )); then
+            echo "[GC] Trigger: used segments = $USED_SEGS >= $HIGH_WM"
+
+            # Keep cleaning until below LOW_WM
+            while (( USED_SEGS >= LOW_WM )); do
+                echo "[GC] Running nilfs-clean..."
+                nilfs-clean -p 0 /dev/sda4
+                sync
+
+                # Recompute used segments after each clean
+                USED_SEGS=$(lssu /dev/sda4 | awk 'NR>1 && $5 > 0 {c++} END {print c+0}')
+                echo "[GC] After cleaning: used segments = $USED_SEGS"
+            done
+
+            echo "[GC] Cleaning complete: used segments < $LOW_WM"
+        fi
     fi
 done
 
