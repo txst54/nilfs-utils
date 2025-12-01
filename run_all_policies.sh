@@ -11,7 +11,7 @@ DEVICE="/dev/sda4"
 MOUNT_POINT="/mnt/nilfs"   # Correct this to your actual mount
 
 # List of policy categories
-POLICIES=("timestamp" "greedy" "cost-benefit")
+POLICIES=("cost-benefit")
 
 # Workload scripts
 WORKLOADS=("test_hotcold.sh")
