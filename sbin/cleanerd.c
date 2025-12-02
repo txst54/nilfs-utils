@@ -766,33 +766,35 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
           "/root/nilfs_mnt");
 	
 	/* Select top N segments */
-	nssegs = min_t(size_t, nilfs_vector_get_size(candidates), nsegs);
+	nssegs = min_t(size_t, nilfs_vector_get_size(candidates), 2);
 
   FILE *logw = NULL;
   logw = fopen(path, "a");
   char wr_logw = 0;
+  double disk_utilization;
   if (logw) {
 		setvbuf(logw, NULL, _IOFBF, 1 << 20);
     wr_logw = 1;
+    #include <sys/statvfs.h>
+    struct statvfs stat;
+
+    if (statvfs(mnt_path, &stat) != 0) {
+        perror("statvfs failed");
+        return -1.0;
+    }
+    unsigned long total_blocks = stat.f_blocks;
+    unsigned long available_blocks = stat.f_bavail;
+    unsigned long used_blocks = total_blocks - available_blocks;
+    disk_utilization = (double)used_blocks / (double)total_blocks;
   }
+  double total_wc = 0.0;
 	for (i = 0; i < nssegs; i++) {
 		cand = nilfs_vector_get_element(candidates, i);
 		assert(cand != NULL);
 		segnums[i] = cand->segnum;
     
     if (wr_logw) {
-      #include <sys/statvfs.h>
-      struct statvfs stat;
-
-      if (statvfs(mnt_path, &stat) != 0) {
-          perror("statvfs failed");
-          return -1.0;
-      }
-      unsigned long total_blocks = stat.f_blocks;
-      unsigned long available_blocks = stat.f_bavail;
-      unsigned long used_blocks = total_blocks - available_blocks;
-      double disk_utilization = (double)used_blocks / (double)total_blocks;
-      fprintf(logw, "%lu,%.3f,%.3f\n", cand->segnum, 2.0/(1.0-cand->util), disk_utilization);
+      total_wc += 2.0/(1.0-cand->util);
     } else {
       syslog(LOG_INFO, "Not logging write cost, log file not opened");
     }
@@ -801,6 +803,9 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 		if (cand->metadata)
 			free(cand->metadata);
 	}
+  if (wr_logw && nssegs > 0) {
+    fprintf(logw, "%ld,%.4f,%.4f\n", nssegs, total_wc / (double)nssegs, disk_utilization);
+  }
 	
 	*prottimep = prottime;
 	*oldestp = oldest;

@@ -42,6 +42,23 @@ static int cb_evaluate(struct nilfs_cleaning_policy *policy,
 	uint32_t blocks_per_segment = nilfs_get_blocks_per_segment(cleanerd->nilfs);
 	double u = (double)live_blocks / blocks_per_segment;
 	int64_t age = now - si->sui_lastmod;
+  if (si->sui_lastmod <= 0) {
+    age = 0; // Indicate unknown age
+  }
+  // int64_t MIN_VALID_TIME = 1500000000; 
+
+  // if (si->sui_lastmod < MIN_VALID_TIME || si->sui_lastmod > (now + 86400)) { 
+  //     // Treat bogus timestamps (0, 34333, -1) as "New" to prevent
+  //     // the cleaner from obsessing over them.
+  //     age = 0; 
+  // } else {
+  //     age = now - si->sui_lastmod;
+  // }
+
+  // /* Double Check: Time Travel */
+  // if (age < 0) {
+  //     age = 0;
+  // }
 	
 	if (si->sui_lastmod >= prottime && si->sui_lastmod <= now)
 		return 0;  /* Protected */
@@ -58,7 +75,7 @@ static int cb_evaluate(struct nilfs_cleaning_policy *policy,
 	candidate->score = (1.0 - u) * age / (1.0 + u);
 	candidate->metadata = NULL;
   candidate->util = u;
-	if (candidate->score <= 1) return 0;
+	// if (candidate->score <= 1) return 0;
 	return 1;  /* Eligible */
 }
 
