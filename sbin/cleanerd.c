@@ -644,75 +644,6 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 	prottime = ts2.tv_sec;
 	oldest = NILFS_CLEANERD_NULLTIME;
 
-	FILE *logf = NULL;
-	{
-		char path[512];
-    struct nilfs_cldconfig *config = &cleanerd->config;
-    if (config->cf_log_file == NULL) {
-      config->cf_log_file = "/var/log/nilfs/";
-    }
-    snprintf(path, sizeof(path),
-          "%sdata.log", config->cf_log_file);
-    syslog(LOG_INFO, "writing segment utilization log to %s", path);
-
-		logf = fopen(path, "a");
-		if (logf) {
-			setvbuf(logf, NULL, _IOFBF, 1 << 20);
-			// CLINT CHANGE: print live blocks and utilization for all segments
-			unsigned long nsegments, blocks_per_segment;
-			ssize_t live_blocks;
-			nilfs_cno_t protcno;
-			struct nilfs_sustat sustat;
-			int ret;
-			struct nilfs *nilfs = cleanerd->nilfs;
-			struct nilfs_cnormap *cnormap = cleanerd->cnormap;
-			nsegments = nilfs_get_nsegments(nilfs);
-			blocks_per_segment = nilfs_get_blocks_per_segment(nilfs);
-			ret = nilfs_cnormap_track_back(cnormap, 0, &protcno);
-			if (ret < 0) {
-				syslog(LOG_ERR, "error getting current checkpoint number");
-				fclose(logf);
-				logf = NULL;
-			}
-			if (nilfs_get_sustat(nilfs, &sustat) < 0) {
-				syslog(LOG_ERR, "error getting segment status");
-				fclose(logf);
-				logf = NULL;
-			}
-
-			// 3. Iterate over all segments
-			for (segnum = 0; segnum < nsegments; segnum++) {
-			  struct nilfs_reclaim_stat stat;
-			  ret = assess_segment_if_dirty(
-			    nilfs,
-			    &sustat,
-			    segnum,
-			    protcno,
-			    &stat
-			  );
-			  if (!ret) {
-			      // Segment is clean, skip
-			      continue;
-			  }
-			  live_blocks = stat.live_blks;
-
-			  if (live_blocks >= 0) {
-			      double util = (double)live_blocks / blocks_per_segment * 100.0;
-			      fprintf(logf, "%lu,%zd,%.2f\n", segnum, live_blocks, util);
-			  }
-			  else if (live_blocks == -2) {
-			      // "Protected" means it contains data recently written or held by a snapshot
-			      // For Ousterhout's math, this is effectively 100% utilization (cannot be cleaned)
-			      fprintf(logf, "%lu,%zd,100.00\n", segnum, live_blocks);
-			  }
-			  else {
-			      fprintf(stderr, "Error accessing segment %lu\n", segnum);
-			  }
-			}
-		} else {
-	    	syslog(LOG_INFO, "failed to open log file: %s", path);
-	    }
-	}
 	/* Evaluate all segments using policy */
 	for (segnum = 0; segnum < sustat->ss_nsegs; segnum += n) {
 		count = min_t(uint64_t, sustat->ss_nsegs - segnum,
@@ -755,67 +686,24 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 	
 	/* Sort using policy's comparison function */
 	nilfs_vector_sort(candidates, policy->compare);
-  char path[512];
-  struct nilfs_cldconfig *config = &cleanerd->config;
-  snprintf(path, sizeof(path),
-          "%swrite_cost.log", config->cf_log_file);
-  syslog(LOG_INFO, "writing segment utilization log to %s", path);
-
-  char mnt_path[512];
-  snprintf(mnt_path, sizeof(mnt_path),
-          "/root/nilfs_mnt");
 	
 	/* Select top N segments */
 	nssegs = min_t(size_t, nilfs_vector_get_size(candidates), 2);
-
-  FILE *logw = NULL;
-  logw = fopen(path, "a");
-  char wr_logw = 0;
-  double disk_utilization;
-  if (logw) {
-		setvbuf(logw, NULL, _IOFBF, 1 << 20);
-    wr_logw = 1;
-    #include <sys/statvfs.h>
-    struct statvfs stat;
-
-    if (statvfs(mnt_path, &stat) != 0) {
-        perror("statvfs failed");
-        return -1.0;
-    }
-    unsigned long total_blocks = stat.f_blocks;
-    unsigned long available_blocks = stat.f_bavail;
-    unsigned long used_blocks = total_blocks - available_blocks;
-    disk_utilization = (double)used_blocks / (double)total_blocks;
-  }
-  double total_wc = 0.0;
 	for (i = 0; i < nssegs; i++) {
 		cand = nilfs_vector_get_element(candidates, i);
 		assert(cand != NULL);
 		segnums[i] = cand->segnum;
     
-    if (wr_logw) {
-      total_wc += 2.0/(1.0-cand->util);
-    } else {
-      syslog(LOG_INFO, "Not logging write cost, log file not opened");
-    }
-		
 		/* Free policy metadata if allocated */
 		if (cand->metadata)
 			free(cand->metadata);
 	}
-  if (wr_logw && nssegs > 0) {
-    fprintf(logw, "%ld,%.4f,%.4f\n", nssegs, total_wc / (double)nssegs, disk_utilization);
-  }
 	
 	*prottimep = prottime;
 	*oldestp = oldest;
 	
 out:
 	nilfs_vector_destroy(candidates);
-	if (logf)
-		fclose(logf);
-  if (wr_logw)
-    fclose(logw);
 	return nssegs;
 }
 
@@ -1709,6 +1597,122 @@ out:
 	return ret;
 }
 
+static void nilfs_workload_logger(
+  struct nilfs_cleanerd *cleanerd, 
+  ssize_t nsegs, 
+  uint64_t* segnums
+) {
+  FILE *logf = NULL;
+  FILE *logw = NULL;
+  char path[512], path_w[512], mnt_path[512];
+  struct nilfs *nilfs = cleanerd->nilfs;
+  struct nilfs_cldconfig *config = &cleanerd->config;
+  struct nilfs_cnormap *cnormap = cleanerd->cnormap;
+  struct nilfs_sustat sustat;
+  nilfs_cno_t protcno;
+  uint64_t nsegments, blocks_per_segment;
+  ssize_t live_blocks;
+  int ret;
+  double disk_utilization;
+  
+  if (config->cf_log_file == NULL) {
+    config->cf_log_file = "/var/log/nilfs/";
+  }
+  snprintf(path, sizeof(path),
+        "%sdata.log", config->cf_log_file);
+  syslog(LOG_INFO, "Writing segment utilization log to %s", path);
+
+  logf = fopen(path, "a");
+  if (!logf) {
+    syslog(LOG_ERR, "Failed to open log file: %s", path);
+    goto out_free;
+  }
+  setvbuf(logf, NULL, _IOFBF, 1 << 20);
+
+  snprintf(path, sizeof(path),
+          "%swrite_cost.log", config->cf_log_file);
+  syslog(LOG_INFO, "Writing cleaned segment utilization log to %s", path);
+  snprintf(mnt_path, sizeof(mnt_path),
+          "/root/nilfs_mnt");
+  logw = fopen(path, "a");
+  if (!logw) {
+    syslog(LOG_ERR, "Failed to open log file: %s", path);
+    goto out_free;
+  }
+
+  nsegments = nilfs_get_nsegments(nilfs);
+  blocks_per_segment = nilfs_get_blocks_per_segment(nilfs);
+  ret = nilfs_cnormap_track_back(cnormap, 0, &protcno);
+  if (ret < 0) {
+    syslog(LOG_ERR, "Error getting current checkpoint number");
+    goto out_free;
+  }
+  if (nilfs_get_sustat(nilfs, &sustat) < 0) {
+    syslog(LOG_ERR, "Error getting segment status");
+    goto out_free;
+  }
+
+  setvbuf(logw, NULL, _IOFBF, 1 << 20);
+  #include <sys/statvfs.h>
+  struct statvfs stat;
+
+  if (statvfs(mnt_path, &stat) != 0) {
+      perror("statvfs failed");
+      return -1.0;
+  }
+  unsigned long total_blocks = stat.f_blocks;
+  unsigned long available_blocks = stat.f_bavail;
+  unsigned long used_blocks = total_blocks - available_blocks;
+  disk_utilization = (double)used_blocks / (double)total_blocks;
+  double total_wc = 0.0;
+
+  for (uint64_t segnum = 0; segnum < nsegments; segnum++) {
+    struct nilfs_reclaim_stat stat;
+    ret = assess_segment_if_dirty(
+      nilfs,
+      &sustat,
+      segnum,
+      protcno,
+      &stat
+    );
+    if (!ret) {
+      continue;
+    }
+    live_blocks = stat.live_blks;
+
+    if (live_blocks >= 0) {
+        double util = (double)live_blocks / blocks_per_segment * 100.0;
+        fprintf(logf, "%lu,%zd,%.2f\n", segnum, live_blocks, util);
+    } else if (live_blocks == -2) {
+        // "Protected" means it contains data recently written or held by a snapshot
+        // For Ousterhout's math, this is effectively 100% utilization (cannot be cleaned)
+        fprintf(logf, "%lu,%zd,100.00\n", segnum, live_blocks);
+    } else {
+        syslog(LOG_ERR, "Error accessing segment %lu\n", segnum);
+    }
+    if (nsegs > 0) {
+      // nssegs is guaranteed to be < 32
+      for (ssize_t i = 0; i < nsegs; i++) {
+        if (segnums[i] == segnum) {
+          double util = (double)live_blocks / blocks_per_segment;
+          total_wc += 2.0/(1.0-util);
+          break;
+        }
+      }
+    }
+    if (nsegs > 0) {
+      fprintf(logw, "%ld,%.4f,%.4f\n", nsegs, total_wc / (double)nsegs, disk_utilization);
+    }
+  }
+  out_free:
+  if (logf) {
+    fclose(logf);
+  }
+  if (logw) {
+    fclose(logw);
+  }
+}
+
 /**
  * nilfs_cleanerd_clean_loop - main loop of the cleaner daemon
  * @cleanerd: cleanerd object
@@ -1784,6 +1788,7 @@ static int nilfs_cleanerd_clean_loop(struct nilfs_cleanerd *cleanerd)
 			syslog(LOG_ERR, "cannot select segments: %m");
 			return -1;
 		}
+    nilfs_workload_logger(cleanerd, ns, segnums);
 		syslog(LOG_DEBUG, "%d segment%s selected to be cleaned",
 		       ns, (ns <= 1) ? "" : "s");
 		ndone = 0;
