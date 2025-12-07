@@ -90,26 +90,45 @@ static int hc_evaluate(struct nilfs_cleaning_policy *policy,
 
     /* 1. Track back to find protection checkpoint */
     ret = nilfs_cnormap_track_back(cleanerd->cnormap, 0, &protcno);
-    if (ret < 0) return 0;
+    if (ret < 0) {
+      syslog(LOG_ERR, "Error getting protection checkpoint number");
+      return 0;
+    }
 
     memset(&stat, 0, sizeof(stat));
 
     /* 2. Assess if dirty and get live block count */
     ret = assess_segment_if_dirty(nilfs, sustat, segnum, protcno, &stat);
     
-    if (ret <= 0) return 0; /* Clean or Error */
-    if (stat.live_blks < 0) return 0; /* Protected */
+    if (ret <= 0) {
+      syslog(LOG_INFO, "Segment %lu is clean or error during assessment", segnum);
+      return 0; /* Clean or Error */
+    }
+    if (stat.live_blks < 0) {
+      syslog(LOG_ERR, "Error assessing live blocks or protected for segment %lu", segnum);
+      return 0; /* Protected */
+    }
 
     /* 3. Check Protocol Time Protection */
-    if (si->sui_lastmod >= prottime && si->sui_lastmod <= now)
+    if (si->sui_lastmod >= prottime && si->sui_lastmod <= now) {
+        syslog(LOG_INFO, "Segment %lu is protected (lastmod: %ld)", segnum, si->sui_lastmod);
         return 0;
+    }
+
+    if (!nilfs_suinfo_reclaimable(si)) {
+        syslog(LOG_INFO, "Segment %lu is not reclaimable", segnum);
+        return 0; /* Not reclaimable */
+    }
 
     int64_t age = now - si->sui_lastmod;
     if (age < 0) age = 0;
 
     /* 4. Allocate Metadata for this candidate */
     struct hc_candidate_meta *meta = malloc(sizeof(*meta));
-    if (!meta) return 0; // Skip if OOM
+    if (!meta) {
+      syslog(LOG_ERR, "OOM allocating candidate metadata");
+      return 0; // Skip if OOM
+    }
 
     /* 5. Classify: Hot vs Cold */
     meta->live_blocks = (uint32_t)stat.live_blks;
@@ -153,9 +172,9 @@ static int age_compare_descending(const void *elem1, const void *elem2)
 static ssize_t strict_cluster_select(struct nilfs_cleaning_policy *policy,
                          struct nilfs_cleanerd *cleanerd,
                          struct nilfs_sustat *sustat,
+                         int64_t now,
                          uint64_t *segnums,
-                         int64_t *prottimep,
-                         int64_t *oldestp)
+                         int64_t prottime)
 {
     struct nilfs *nilfs = cleanerd->nilfs;
     struct nilfs_segment_candidate *candidates = NULL;
@@ -166,13 +185,8 @@ static ssize_t strict_cluster_select(struct nilfs_cleaning_policy *policy,
     ssize_t candidate_count = 0;
     ssize_t capacity = 0;
     int ret;
-    int64_t now = 0; /* Note: In real usage, you might get 'now' from time() or passed in context */
     struct timeval tv;
     
-    /* Get current time for age calculations */
-    if (gettimeofday(&tv, NULL) == 0)
-        now = tv.tv_sec;
-
     /* 1. Get total number of segments to iterate */
     nsegs = nilfs_get_nsegments(nilfs);
     if (nsegs == 0) return 0;
@@ -181,7 +195,7 @@ static ssize_t strict_cluster_select(struct nilfs_cleaning_policy *policy,
     capacity = 100; /* Start small */
     candidates = malloc(capacity * sizeof(struct nilfs_segment_candidate));
     if (!candidates) return -ENOMEM;
-
+    syslog(LOG_INFO, "Hot-Cold Segregation: Scanning %lu segments", nsegs);
     /* 2. Manual Iteration over all segments */
     for (segnum = 0; segnum < nsegs; segnum++) {
         /* Fetch Segment Usage Info */
@@ -193,11 +207,13 @@ static ssize_t strict_cluster_select(struct nilfs_cleaning_policy *policy,
         memset(&cand, 0, sizeof(cand));
         
         /* Note: 'prottime' is usually passed via pointer, we dereference if available */
-        int64_t ptime = prottimep ? *prottimep : 0;
 
-        ret = hc_evaluate(policy, cleanerd, sustat, &si, segnum, now, ptime, &cand);
+        ret = hc_evaluate(policy, cleanerd, sustat, &si, segnum, now, prottime, &cand);
         
         if (ret > 0) {
+            syslog(LOG_INFO, "  Eligible Segment %lu classified as %s with TS %ld", segnum,
+                   ((struct hc_candidate_meta *)cand.metadata)->is_hot ? "HOT" : "COLD", 
+                   ((struct hc_candidate_meta *)cand.metadata)->lastmod);
             /* Add to array, resize if needed */
             if (candidate_count >= capacity) {
                 capacity *= 2;
@@ -226,14 +242,21 @@ static ssize_t strict_cluster_select(struct nilfs_cleaning_policy *policy,
         struct nilfs_segment_candidate *seed = &candidates[0];
         uint64_t accum_blocks = 0;
         uint32_t blocks_per_seg = nilfs_get_blocks_per_segment(nilfs);
-        int64_t age_window = 3600 * 24; // 1 Day Window allowed
+        int64_t age_window = 4; // 1 Day Window allowed
 
         int64_t seed_ts = ((struct hc_candidate_meta *)seed->metadata)->lastmod; 
+        syslog(LOG_INFO, "Hot-Cold Segregation: Seed Segment %lu with TS %ld", seed->segnum, seed_ts);
 
         ssize_t i;
         for (i = 0; i < candidate_count; i++) {
+            if (count >= NILFS_CLDCONFIG_NSEGMENTS_PER_CLEAN_MAX) {
+                syslog(LOG_WARNING, "Reached maximum selection limit (%ld segments)", 
+                       NILFS_CLDCONFIG_NSEGMENTS_PER_CLEAN_MAX);
+                break; /* Reached desired number of segments */
+            }
             struct nilfs_segment_candidate *cand = &candidates[i];
             int64_t cand_ts = ((struct hc_candidate_meta *)cand->metadata)->lastmod;
+            syslog(LOG_INFO, "  Considering Segment %lu with TS %ld", cand->segnum, cand_ts);
 
             /* CHECK: Is this candidate within the time window of the seed? */
             if (llabs(seed_ts - cand_ts) > age_window) {
@@ -241,13 +264,15 @@ static ssize_t strict_cluster_select(struct nilfs_cleaning_policy *policy,
                    If strict segregation is desired, we skip. */
                 continue; 
             }
-
+            syslog(LOG_INFO, "    --> Selected Segment %lu, placing at count %lu", cand->segnum, count);
             /* Add to selection output array 'segnums' */
             segnums[count++] = cand->segnum;
+            syslog(LOG_INFO, "    Added Segment %lu to selection (Total selected: %ld)", cand->segnum, count);
             
             /* Accumulate live blocks */
             struct hc_candidate_meta *meta = (struct hc_candidate_meta *)cand->metadata;
             accum_blocks += meta->live_blocks;
+            syslog(LOG_INFO, "    Accumulated live blocks: %lu / %u", accum_blocks, blocks_per_seg);
 
             /* Stop if we have filled a new segment */
             if (accum_blocks >= blocks_per_seg) {

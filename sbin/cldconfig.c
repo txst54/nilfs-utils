@@ -394,11 +394,19 @@ static int nilfs_cldconfig_handle_selection_policy_cost_benefit(struct nilfs_cld
 	return 0;
 }
 
+static int nilfs_cldconfig_handle_selection_policy_segregation(struct nilfs_cldconfig *cf,
+						  char **tokens, size_t ntoks){
+	cf->cf_selection_policy = NILFS_SELECTION_POLICY_SEGREGATION;
+	cf->cf_policy_name = "segregation";
+	return 0;
+}
+
 static const struct nilfs_cldconfig_polhandle
 nilfs_cldconfig_polhandle_table[] = {
 	{"timestamp",      nilfs_cldconfig_handle_selection_policy_timestamp},
 	{"greedy",         nilfs_cldconfig_handle_selection_policy_greedy},
 	{"cost-benefit",   nilfs_cldconfig_handle_selection_policy_cost_benefit},
+  {"segregation",   nilfs_cldconfig_handle_selection_policy_segregation},
 };
 
 

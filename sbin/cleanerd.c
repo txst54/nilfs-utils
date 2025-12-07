@@ -622,18 +622,8 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 	
   syslog(LOG_INFO, "selecting segments to clean using policy: %s", policy->name);
 	/* If policy has custom select function, use it */
-	if (policy->select)
-		return policy->select(policy, cleanerd, sustat, 
-				      segnums, prottimep, oldestp);
 
-	/* Generic selection using policy's evaluate function */
-	nsegs = nilfs_cleanerd_ncleansegs(cleanerd);
-
-	candidates = nilfs_vector_create(sizeof(struct nilfs_segment_candidate));
-	if (unlikely(!candidates))
-		return -1;
-
-	/* Calculate protection time */
+  /* Calculate protection time */
 	ret = clock_gettime(CLOCK_REALTIME, &ts);
 	if (unlikely(ret < 0)) {
 		nssegs = -1;
@@ -643,6 +633,41 @@ nilfs_cleanerd_select_segments(struct nilfs_cleanerd *cleanerd,
 	now = ts.tv_sec;
 	prottime = ts2.tv_sec;
 	oldest = NILFS_CLEANERD_NULLTIME;
+  nsegs = nilfs_cleanerd_ncleansegs(cleanerd);
+  for (segnum = 0; segnum < sustat->ss_nsegs; segnum += n) {
+    count = min_t(uint64_t, sustat->ss_nsegs - segnum,
+			      NILFS_CLEANERD_NSUINFO);
+    n = nilfs_get_suinfo(cleanerd->nilfs, segnum, si, count);
+		if (unlikely(n < 0)) {
+			nssegs = n;
+			goto out;
+		}
+
+		for (i = 0; i < n; i++) {
+			if (!nilfs_suinfo_reclaimable(&si[i]))
+				continue;
+
+			/* Track oldest segment */
+			if (si[i].sui_lastmod < oldest)
+				oldest = si[i].sui_lastmod;
+    }
+    if (unlikely(n == 0))
+			break;
+  }
+	if (policy->select) {
+    syslog(LOG_INFO, "Using custom select function for policy: %s", policy->name);
+    *oldestp = oldest;
+    *prottimep = prottime;
+		return policy->select(policy, cleanerd, sustat, now, 
+				      segnums, prottime);
+  }
+  syslog(LOG_INFO, "No select policy provided, using generic selection method");
+
+	/* Generic selection using policy's evaluate function */
+
+	candidates = nilfs_vector_create(sizeof(struct nilfs_segment_candidate));
+	if (unlikely(!candidates))
+		return -1;
 
 	/* Evaluate all segments using policy */
 	for (segnum = 0; segnum < sustat->ss_nsegs; segnum += n) {

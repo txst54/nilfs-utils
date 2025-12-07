@@ -56,9 +56,9 @@ struct nilfs_cleaning_policy {
 	ssize_t (*select)(struct nilfs_cleaning_policy *policy,
 			  struct nilfs_cleanerd *cleanerd,
 			  struct nilfs_sustat *sustat,
+        int64_t now,
 			  uint64_t *segnums,
-			  int64_t *prottimep,
-			  int64_t *oldestp);
+        int64_t prottime);
 	
 	/* Policy-specific state */
 	void *policy_data;
